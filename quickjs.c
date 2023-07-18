@@ -69,9 +69,9 @@
 
 /* define to include Atomics.* operations which depend on the OS
    threads */
-#if !defined(EMSCRIPTEN)
-#define CONFIG_ATOMICS
-#endif
+// #if !defined(EMSCRIPTEN)
+// #define CONFIG_ATOMICS
+// #endif
 
 #if !defined(EMSCRIPTEN)
 /* enable stack limitation */
@@ -1683,10 +1683,10 @@ static inline size_t js_def_malloc_usable_size(void *ptr)
 #elif defined(EMSCRIPTEN)
     return 0;
 #elif defined(__linux__)
-    return malloc_usable_size(ptr);
+    return 0;
 #else
     /* change this to `return 0;` if compilation fails */
-    return malloc_usable_size(ptr);
+    return 0;
 #endif
 }
 
@@ -1760,7 +1760,7 @@ static const JSMallocFunctions def_malloc_funcs = {
     (size_t (*)(const void *))malloc_usable_size,
 #else
     /* change this to `NULL,` if compilation fails */
-    malloc_usable_size,
+    NULL,
 #endif
 };
 
@@ -7843,7 +7843,7 @@ JSAtom JS_ValueToAtom(JSContext *ctx, JSValueConst val)
     return atom;
 }
 
-static JSValue JS_GetPropertyValue(JSContext *ctx, JSValueConst this_obj,
+JSValue JS_GetPropertyValue(JSContext *ctx, JSValueConst this_obj,
                                    JSValue prop)
 {
     JSAtom atom;
@@ -11363,16 +11363,16 @@ static int js_ecvt(double d, int n_digits, int *decpt, int *sign, char *buf,
                      buf_tmp, sizeof(buf_tmp));
             /* XXX: could use 2 digits to reduce the average running time */
             if (buf1[n_digits] == '5') {
-                js_ecvt1(d, n_digits + 1, &decpt1, &sign1, buf1, FE_DOWNWARD,
+                js_ecvt1(d, n_digits + 1, &decpt1, &sign1, buf1, FE_TONEAREST,
                          buf_tmp, sizeof(buf_tmp));
-                js_ecvt1(d, n_digits + 1, &decpt2, &sign2, buf2, FE_UPWARD,
+                js_ecvt1(d, n_digits + 1, &decpt2, &sign2, buf2, FE_TONEAREST,
                          buf_tmp, sizeof(buf_tmp));
                 if (memcmp(buf1, buf2, n_digits + 1) == 0 && decpt1 == decpt2) {
                     /* exact result: round away from zero */
                     if (sign1)
-                        rounding_mode = FE_DOWNWARD;
+                        rounding_mode = FE_TONEAREST;
                     else
-                        rounding_mode = FE_UPWARD;
+                        rounding_mode = FE_TONEAREST;
                 }
             }
         }
@@ -11414,14 +11414,14 @@ static void js_fcvt(char *buf, int buf_size, double d, int n_digits)
         rounding_mode = FE_TONEAREST;
         /* XXX: could use 2 digits to reduce the average running time */
         if (buf1[n1 - 1] == '5') {
-            n1 = js_fcvt1(buf1, sizeof(buf1), d, n_digits + 1, FE_DOWNWARD);
-            n2 = js_fcvt1(buf2, sizeof(buf2), d, n_digits + 1, FE_UPWARD);
+            n1 = js_fcvt1(buf1, sizeof(buf1), d, n_digits + 1, FE_TONEAREST);
+            n2 = js_fcvt1(buf2, sizeof(buf2), d, n_digits + 1, FE_TONEAREST);
             if (n1 == n2 && memcmp(buf1, buf2, n1) == 0) {
                 /* exact result: round away from zero */
                 if (buf1[0] == '-')
-                    rounding_mode = FE_DOWNWARD;
+                    rounding_mode = FE_TONEAREST;
                 else
-                    rounding_mode = FE_UPWARD;
+                    rounding_mode = FE_TONEAREST;
             }
         }
     }
@@ -14385,7 +14385,80 @@ static no_inline int js_not_slow(JSContext *ctx, JSValue *sp)
     return 0;
 }
 
-static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
+int js_relational_slow_cmp(JSContext *ctx, JSValue op1, JSValue op2, int op) {
+    int res;
+    op1 = JS_ToPrimitiveFree(ctx, op1, HINT_NUMBER);
+    if (JS_IsException(op1)) {
+        JS_FreeValue(ctx, op2);
+        goto exception;
+    }
+    op2 = JS_ToPrimitiveFree(ctx, op2, HINT_NUMBER);
+    if (JS_IsException(op2)) {
+        JS_FreeValue(ctx, op1);
+        goto exception;
+    }
+    if (JS_VALUE_GET_TAG(op1) == JS_TAG_STRING &&
+        JS_VALUE_GET_TAG(op2) == JS_TAG_STRING) {
+        JSString *p1, *p2;
+        p1 = JS_VALUE_GET_STRING(op1);
+        p2 = JS_VALUE_GET_STRING(op2);
+        res = js_string_compare(ctx, p1, p2);
+        JS_FreeValue(ctx, op1);
+        JS_FreeValue(ctx, op2);
+        switch(op) {
+        case OP_lt:
+            res = (res < 0);
+            break;
+        case OP_lte:
+            res = (res <= 0);
+            break;
+        case OP_gt:
+            res = (res > 0);
+            break;
+        default:
+        case OP_gte:
+            res = (res >= 0);
+            break;
+        }
+    } else {
+        double d1, d2;
+        if (JS_ToFloat64Free(ctx, &d1, op1)) {
+            JS_FreeValue(ctx, op2);
+            goto exception;
+        }
+        if (JS_ToFloat64Free(ctx, &d2, op2))
+            goto exception;
+        switch(op) {
+        case 0:
+            res = (d1 < d2); /* if NaN return false */
+            break;
+        case 1:
+            res = (d1 <= d2); /* if NaN return false */
+            break;
+        case 2:
+            res = (d1 > d2); /* if NaN return false */
+            break;
+        default:
+        case 3:
+            res = (d1 >= d2); /* if NaN return false */
+            break;
+        }
+    }
+    return res;
+ exception:
+    return -1;
+}
+
+JSValue op_add(JSContext *ctx, JSValue op1, JSValue op2) {
+    if (likely(JS_VALUE_IS_BOTH_INT(op1, op2))) {
+        int64_t r;
+        r = (int64_t)JS_VALUE_GET_INT(op1) + JS_VALUE_GET_INT(op2);
+        return JS_NewInt32(ctx, r);
+    }
+}
+
+
+int js_relational_slow(JSContext *ctx, JSValue *sp,
                                         OPCodeEnum op)
 {
     JSValue op1, op2;

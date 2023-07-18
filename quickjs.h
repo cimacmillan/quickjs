@@ -542,6 +542,9 @@ static js_force_inline JSValue JS_NewUint32(JSContext *ctx, uint32_t val)
 JSValue JS_NewBigInt64(JSContext *ctx, int64_t v);
 JSValue JS_NewBigUint64(JSContext *ctx, uint64_t v);
 
+int js_relational_slow_cmp(JSContext *ctx, JSValue op1, JSValue op2, int op);
+JSValue op_add(JSContext *ctx, JSValue op1, JSValue op2);
+
 static js_force_inline JSValue JS_NewFloat64(JSContext *ctx, double d)
 {
     JSValue v;
@@ -732,6 +735,8 @@ JSValue JS_GetPropertyStr(JSContext *ctx, JSValueConst this_obj,
                           const char *prop);
 JSValue JS_GetPropertyUint32(JSContext *ctx, JSValueConst this_obj,
                              uint32_t idx);
+JSValue JS_GetPropertyValue(JSContext *ctx, JSValueConst this_obj,
+                                   JSValue prop);
 
 int JS_SetPropertyInternal(JSContext *ctx, JSValueConst this_obj,
                            JSAtom prop, JSValue val,
